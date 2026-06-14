@@ -44,13 +44,13 @@ services:
       - key: OR_FALLBACK_2
         value: google/gemini-2.5-flash-lite
       - key: OR_MAX_RETRIES
-        value: 3
+        value: "3"
       - key: OPENROUTER_MODEL
         value: deepseek/deepseek-chat-v3
 
       # ── Pipeline defaults ───────────────────────────────────────────────────
       - key: DEFAULT_SAMPLES_PER_CHUNK
-        value: 5
+        value: "5"
       - key: DEFAULT_QUALITY_THRESHOLD
         value: "0.7"
 
@@ -76,16 +76,10 @@ services:
   # ── Frontend — React / Vite Static Site ──────────────────────────────────────
   - type: static
     name: modifai-frontend
-    buildCommand: cd frontend && npm install && npm run build
+    # VITE_API_URL is injected as a shell variable so Vite bakes it into the
+    # production bundle at build time. type:static does NOT support envVars in
+    # render.yaml — this inline approach is the correct workaround.
+    buildCommand: cd frontend && VITE_API_URL=https://modifai-backend.onrender.com/api/v1 npm install && VITE_API_URL=https://modifai-backend.onrender.com/api/v1 npm run build
     staticPublishPath: frontend/dist
-    envVars:
-      # ── VITE_API_URL is baked in at build time by Vite ─────────────────────
-      # If Render assigns a different URL to modifai-backend, update this value
-      # in the Render dashboard and trigger a redeploy of modifai-frontend.
-      - key: VITE_API_URL
-        value: https://modifai-backend.onrender.com/api/v1
-    # SPA routing — redirect all paths to index.html
-    routes:
-      - type: rewrite
-        source: /*
-        destination: /index.html
+    # NOTE: After deploy, configure the SPA rewrite in the Render dashboard:
+    # Static Site → Redirects/Rewrites → Add Rule: source=/* destination=/index.html type=Rewrite
