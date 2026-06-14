@@ -19,6 +19,8 @@ env/
 *.credentials
 *.env
 .env
+# Allow .env.production — it only contains the public backend URL, no secrets
+!frontend/.env.production
 
 # Pipeline runtime outputs (generated files, not source code)
 agent_events.jsonl

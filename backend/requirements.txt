@@ -7,3 +7,11 @@ python-multipart>=0.0.18
 sse-starlette>=2.2.0
 
 pypdf>=3.17.0
+
+# Config loading (load_dotenv in app/config.py)
+python-dotenv>=1.0.0
+
+# Virtual Mind agents — LLM provider (virtual_mind/modifai/core/llm_provider.py)
+# Only needed if LLM_PROVIDER=gemini. Kept here so the import doesn't fail
+# at startup even when using openrouter.
+google-generativeai>=0.8.0

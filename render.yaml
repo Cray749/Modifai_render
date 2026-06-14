@@ -1,0 +1,91 @@
+# ════════════════════════════════════════════════════════════════════════════════
+# Modifai — Render Blueprint
+# Deploy with: render.com → New → Blueprint → point at this repo
+# ════════════════════════════════════════════════════════════════════════════════
+
+services:
+
+  # ── Backend — FastAPI Web Service ─────────────────────────────────────────────
+  - type: web
+    name: modifai-backend
+    env: python
+    plan: free
+    region: oregon
+    # Run from repo root so virtual_mind/ is accessible at ../../../virtual_mind
+    # relative to backend/app/services/ (which is how virtual_mind_service.py
+    # resolves its VIRTUAL_MIND_PATH).
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+    envVars:
+      # ── Python ─────────────────────────────────────────────────────────────
+      - key: PYTHON_VERSION
+        value: 3.12.3
+
+      # ── Server ─────────────────────────────────────────────────────────────
+      - key: HOST
+        value: 0.0.0.0
+
+      # ── Database (ephemeral on free plan — resets on redeploy) ─────────────
+      - key: DATABASE_PATH
+        value: modifai.db
+
+      # ── AWS ────────────────────────────────────────────────────────────────
+      - key: AWS_REGION
+        value: ap-south-1
+
+      # ── LLM / Virtual Mind (set LLM_PROVIDER to match your key) ───────────
+      # Options: openrouter | gemini | bedrock
+      - key: LLM_PROVIDER
+        value: openrouter
+      - key: OR_MODEL
+        value: deepseek/deepseek-chat-v3
+      - key: OR_FALLBACK_1
+        value: qwen/qwen3-235b-a22b
+      - key: OR_FALLBACK_2
+        value: google/gemini-2.5-flash-lite
+      - key: OR_MAX_RETRIES
+        value: 3
+      - key: OPENROUTER_MODEL
+        value: deepseek/deepseek-chat-v3
+
+      # ── Pipeline defaults ───────────────────────────────────────────────────
+      - key: DEFAULT_SAMPLES_PER_CHUNK
+        value: 5
+      - key: DEFAULT_QUALITY_THRESHOLD
+        value: "0.7"
+
+      # ── CORS — must include your deployed frontend URL ──────────────────────
+      - key: CORS_ORIGINS
+        value: https://modifai-frontend.onrender.com,http://localhost:5173
+
+      # ── SECRET variables — add these in the Render dashboard ───────────────
+      # DO NOT paste secrets into this file. Add them via:
+      # Render Dashboard → modifai-backend → Environment → Add Secret File / Env Var
+      #
+      #   AWS_ACCESS_KEY_ID         your AWS IAM access key
+      #   AWS_SECRET_ACCESS_KEY     your AWS IAM secret key
+      #   S3_BUCKET                 e.g. modifai-data
+      #   STATE_MACHINE_ARN         your Step Functions ARN
+      #   OPENROUTER_API_KEY        sk-or-v1-...
+      #   OR_SECRET_NAME            modifai/or  (if using Secrets Manager fallback)
+      #
+      # Optional — only needed if LLM_PROVIDER=gemini:
+      #   GEMINI_API_KEY            your Google AI Studio key
+
+
+  # ── Frontend — React / Vite Static Site ──────────────────────────────────────
+  - type: static
+    name: modifai-frontend
+    buildCommand: cd frontend && npm install && npm run build
+    staticPublishPath: frontend/dist
+    envVars:
+      # ── VITE_API_URL is baked in at build time by Vite ─────────────────────
+      # If Render assigns a different URL to modifai-backend, update this value
+      # in the Render dashboard and trigger a redeploy of modifai-frontend.
+      - key: VITE_API_URL
+        value: https://modifai-backend.onrender.com/api/v1
+    # SPA routing — redirect all paths to index.html
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
