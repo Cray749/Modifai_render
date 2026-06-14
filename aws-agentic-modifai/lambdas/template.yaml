@@ -1,0 +1,182 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+Description: >
+  ModifAI — OpenRouter-powered LLM fine-tuning pipeline (Bedrock-free).
+  All AI inference is routed through llm_helper.py using the OpenRouter API.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Global defaults applied to every Lambda function
+# ─────────────────────────────────────────────────────────────────────────────
+Globals:
+  Function:
+    Runtime:      python3.12
+    Architectures: [arm64]          # Graviton — cheaper + faster cold starts
+    Timeout:      120               # seconds; increase if LLM latency is high
+    MemorySize:   512               # MB
+    Layers:
+      - !Ref PipelineDepsLayer
+    Environment:
+      Variables:
+        AWS_REGION:          !Ref AWS::Region
+        S3_BUCKET:           !Ref PipelineBucket
+        OR_SECRET_NAME:      modifai/or
+        OR_MODEL:            deepseek/deepseek-chat-v3
+        OR_MAX_RETRIES:      "3"
+        OR_RETRY_DELAY:      "1.5"
+        JOB_MANIFEST_PREFIX: modifai-jobs
+        DEMO_MODE:           "false"
+        QUALITY_THRESHOLD:   "0.85"
+        MAX_TUNING_ATTEMPTS: "3"
+        BASE_MODEL:          meta.llama3-8b-instruct-v1:0
+    Tracing: Active                 # X-Ray tracing
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Parameters
+# ─────────────────────────────────────────────────────────────────────────────
+Parameters:
+  Environment:
+    Type:    String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Resources
+# ─────────────────────────────────────────────────────────────────────────────
+Resources:
+
+  # ── S3 bucket ───────────────────────────────────────────────────────────────
+  PipelineBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "modifai-bucket-${AWS::AccountId}-${AWS::Region}-${Environment}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls:       true
+        BlockPublicPolicy:     true
+        IgnorePublicAcls:      true
+        RestrictPublicBuckets: true
+
+  # ── Lambda layer: Python dependencies ────────────────────────────────────
+  PipelineDepsLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName:          modifai-pipeline-deps
+      Description:        requests, boto3, PyPDF2
+      ContentUri:         layer/
+      CompatibleRuntimes: [python3.12]
+      RetentionPolicy:    Retain
+    Metadata:
+      BuildMethod: python3.12
+
+  # ── IAM role shared by all Lambdas ────────────────────────────────────────
+  PipelineLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "modifai-pipeline-lambda-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        - PolicyName: PipelineAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid:    S3PipelineBucket
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt PipelineBucket.Arn
+                  - !Sub "${PipelineBucket.Arn}/*"
+              - Sid:    SecretsManagerOpenRouter
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - "arn:aws:secretsmanager:ap-south-1:527371380408:secret:modifai/or-QtO8iC"
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:modifai/or*"
+
+  # ── Lambda functions ──────────────────────────────────────────────────────
+
+  IntentAnalyzerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:  !Sub "modifai-intent-analyzer-${Environment}"
+      Handler:       intent_analyzer.lambda_handler
+      CodeUri:       src/
+      Description:   Analyse uploaded documents; recommend chunking and hyperparameters.
+      Role:          !GetAtt PipelineLambdaRole.Arn
+
+  FineTuningTriggerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:  !Sub "modifai-fine-tuning-trigger-${Environment}"
+      Handler:       fine_tuning_trigger.lambda_handler
+      CodeUri:       src/
+      Description:   Validate config via LLM; write job manifest to S3.
+      Role:          !GetAtt PipelineLambdaRole.Arn
+
+  StatusCheckerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:  !Sub "modifai-status-checker-${Environment}"
+      Handler:       status_checker.lambda_handler
+      CodeUri:       src/
+      Description:   Poll job status from S3 manifest (or simulate via LLM).
+      Role:          !GetAtt PipelineLambdaRole.Arn
+
+  ModelEvaluatorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:  !Sub "modifai-model-evaluator-${Environment}"
+      Handler:       model_evaluator.lambda_handler
+      CodeUri:       src/
+      Description:   Evaluate model quality using LLM as critic.
+      Role:          !GetAtt PipelineLambdaRole.Arn
+
+  HyperparameterTunerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:  !Sub "modifai-hyperparameter-tuner-${Environment}"
+      Handler:       hyperparameter_tuner.lambda_handler
+      CodeUri:       src/
+      Description:   Decide deploy vs. tune; suggest new hyperparameters via LLM.
+      Role:          !GetAtt PipelineLambdaRole.Arn
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Outputs
+# ─────────────────────────────────────────────────────────────────────────────
+Outputs:
+  PipelineBucketName:
+    Value:       !Ref PipelineBucket
+    Description: S3 bucket for job manifests and training data
+
+  IntentAnalyzerArn:
+    Value: !GetAtt IntentAnalyzerFunction.Arn
+
+  FineTuningTriggerArn:
+    Value: !GetAtt FineTuningTriggerFunction.Arn
+
+  StatusCheckerArn:
+    Value: !GetAtt StatusCheckerFunction.Arn
+
+  ModelEvaluatorArn:
+    Value: !GetAtt ModelEvaluatorFunction.Arn
+
+  HyperparameterTunerArn:
+    Value: !GetAtt HyperparameterTunerFunction.Arn

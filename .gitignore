@@ -1,0 +1,44 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# pytest cache
+.pytest_cache/
+*.egg-info/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# AWS credentials — NEVER commit these
+.aws/
+*.credentials
+*.env
+.env
+
+# Pipeline runtime outputs (generated files, not source code)
+agent_events.jsonl
+smoke_events.jsonl
+*.jsonl
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build manual and planning docs (optional — remove these lines if you want them in git)
+# P1_BUILD_MANUAL.md
+# implementation_plan.md
+
+# AWS SAM
+.aws-sam/
+
+old/

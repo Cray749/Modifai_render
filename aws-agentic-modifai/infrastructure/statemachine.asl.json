@@ -1,0 +1,261 @@
+{
+  "Comment": "Autonomous Agentic Modifai Pipeline supporting 4 distinct modes.",
+  "StartAt": "CheckDatasetGenNeeded",
+  "States": {
+    "CheckDatasetGenNeeded": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.pipeline_mode",
+          "StringEquals": "FINETUNE_ONLY",
+          "Next": "InitializeFineTuningAttempt"
+        }
+      ],
+      "Default": "AnalyzeIntentAndStrategize"
+    },
+    "AnalyzeIntentAndStrategize": {
+      "Type": "Task",
+      "Resource": "${IntentAnalyzerLambdaArn}",
+      "Comment": "Analyzes the data to determine intent, chunking strategy, base model, and initial hyperparameters.",
+      "ResultPath": "$.strategy",
+      "Next": "DocumentProcessing"
+    },
+    "DocumentProcessing": {
+      "Type": "Task",
+      "Resource": "${DocumentProcessorLambdaArn}",
+      "Comment": "Chunks the document based on the strategy's parameters.",
+      "ResultPath": "$.chunks",
+      "Next": "GenerateDatasetMap"
+    },
+    "GenerateDatasetMap": {
+      "Type": "Map",
+      "ItemsPath": "$.chunks.chunk_uris",
+      "MaxConcurrency": 2,
+      "Iterator": {
+        "StartAt": "GenerateSamplesForChunk",
+        "States": {
+          "GenerateSamplesForChunk": {
+            "Type": "Task",
+            "Resource": "${DatasetGeneratorLambdaArn}",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.TooManyRequestsException",
+                  "States.TaskFailed"
+                ],
+                "IntervalSeconds": 10,
+                "MaxAttempts": 4,
+                "BackoffRate": 2
+              }
+            ],
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.dataset",
+      "Next": "EvaluateDatasetQuality"
+    },
+    "EvaluateDatasetQuality": {
+      "Type": "Task",
+      "Resource": "${DatasetEvaluatorLambdaArn}",
+      "Comment": "Critic & Curriculum evaluation. Checks if dataset quality is sufficient.",
+      "ResultPath": "$.dataset_evaluation",
+      "Next": "CheckDatasetQuality"
+    },
+    "CheckDatasetQuality": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.dataset_evaluation.action",
+          "StringEquals": "regenerate",
+          "Next": "GenerateDatasetMap"
+        }
+      ],
+      "Default": "CheckFineTuningNeeded"
+    },
+    "CheckFineTuningNeeded": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.pipeline_mode",
+          "StringEquals": "DATASET_ONLY",
+          "Next": "PipelineSucceeded"
+        }
+      ],
+      "Default": "InitializeFineTuningAttempt"
+    },
+    "InitializeFineTuningAttempt": {
+      "Type": "Pass",
+      "Result": 0,
+      "ResultPath": "$.poll_count",
+      "Next": "StartFineTuningJob"
+    },
+    "ResetPollCount": {
+      "Type": "Pass",
+      "Result": 0,
+      "ResultPath": "$.poll_count",
+      "Next": "StartFineTuningJob"
+    },
+    "StartFineTuningJob": {
+      "Type": "Task",
+      "Resource": "${FineTuningTriggerLambdaArn}",
+      "Comment": "Starts the fine-tuning job with current hyperparameters.",
+      "ResultPath": "$.job_info",
+      "Next": "WaitForTraining"
+    },
+    "WaitForTraining": {
+      "Type": "Wait",
+      "Seconds": 60,
+      "Next": "IncrementPollCount"
+    },
+    "IncrementPollCount": {
+      "Type": "Pass",
+      "Parameters": {
+        "new_count.$": "States.MathAdd($.poll_count, 1)"
+      },
+      "ResultPath": "$.poll_update",
+      "Next": "UpdatePollCount"
+    },
+    "CheckPollLimit": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.poll_count",
+          "NumericGreaterThan": 30,
+          "Next": "TrainingTimeout"
+        }
+      ],
+      "Default": "CheckTrainingStatus"
+    },
+    "CheckTrainingStatus": {
+      "Type": "Task",
+      "Resource": "${StatusCheckerLambdaArn}",
+      "ResultPath": "$.job_status",
+      "Next": "IsTrainingComplete"
+    },
+    "IsTrainingComplete": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.job_status.status",
+          "StringEquals": "Completed",
+          "Next": "EvaluateModelPerformance"
+        },
+        {
+          "Variable": "$.job_status.status",
+          "StringEquals": "Failed",
+          "Next": "TrainingFailed"
+        }
+      ],
+      "Default": "WaitForTraining"
+    },
+    "TrainingFailed": {
+      "Type": "Fail",
+      "Cause": "Fine-tuning job failed in AWS."
+    },
+    "EvaluateModelPerformance": {
+      "Type": "Task",
+      "Resource": "${ModelEvaluatorLambdaArn}",
+      "Comment": "Runs tests and gets training loss. Weights both mechanisms.",
+      "ResultPath": "$.model_evaluation",
+      "Next": "AgenticDecisionNode"
+    },
+    "AgenticDecisionNode": {
+      "Type": "Task",
+      "Resource": "${HyperparameterTunerLambdaArn}",
+      "Comment": "Agent decides: deploy, tune hyperparameters (if < 3 attempts), or fail.",
+      "ResultPath": "$.agent_decision",
+      "Next": "ExecuteAgentDecision"
+    },
+    "ExecuteAgentDecision": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.agent_decision.action",
+          "StringEquals": "deploy",
+          "Next": "CheckDeployNeeded"
+        },
+        {
+          "Variable": "$.agent_decision.action",
+          "StringEquals": "tune",
+          "Next": "ResetPollCount"
+        },
+        {
+          "Variable": "$.agent_decision.action",
+          "StringEquals": "max_attempts_reached",
+          "Next": "MaxAttemptsFailed"
+        }
+      ],
+      "Default": "CheckDeployNeeded"
+    },
+    "CheckDeployNeeded": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.pipeline_mode",
+          "StringEquals": "DATASET_AND_FINETUNE_AND_DEPLOY",
+          "Next": "DeployEndpoint"
+        }
+      ],
+      "Default": "PipelineSucceeded"
+    },
+    "DeployEndpoint": {
+      "Type": "Task",
+      "Resource": "${DeployerLambdaArn}",
+      "ResultPath": "$.deployment",
+      "Next": "KnowledgeExtraction"
+    },
+    "PipelineSucceeded": {
+      "Type": "Succeed"
+    },
+    "MaxAttemptsFailed": {
+      "Type": "Fail",
+      "Cause": "Agentic loop hit max retries (3) without reaching desired quality."
+    },
+    "TrainingTimeout": {
+      "Type": "Fail",
+      "Error": "TrainingTimeout",
+      "Cause": "Training status polling exceeded 30 iterations (~30 minutes). Job may be stuck or quota exhausted."
+    },
+    "UpdatePollCount": {
+      "Type": "Pass",
+      "InputPath": "$.poll_update.new_count",
+      "ResultPath": "$.poll_count",
+      "Next": "CheckPollLimit"
+    },
+    "KnowledgeExtraction": {
+      "Type": "Pass",
+      "Result": {
+        "status": "Complete"
+      },
+      "ResultPath": "$.knowledge_extraction",
+      "Next": "AgentDiscovery"
+    },
+    "AgentDiscovery": {
+      "Type": "Pass",
+      "Result": {
+        "status": "Complete"
+      },
+      "ResultPath": "$.agent_discovery",
+      "Next": "AutomationDiscovery"
+    },
+    "AutomationDiscovery": {
+      "Type": "Pass",
+      "Result": {
+        "status": "Complete"
+      },
+      "ResultPath": "$.automation_discovery",
+      "Next": "AgentDeployment"
+    },
+    "AgentDeployment": {
+      "Type": "Pass",
+      "Result": {
+        "status": "Complete"
+      },
+      "ResultPath": "$.agent_deployment",
+      "Next": "PipelineSucceeded"
+    }
+  }
+}

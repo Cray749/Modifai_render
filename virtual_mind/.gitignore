@@ -1,0 +1,50 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# pytest cache
+.pytest_cache/
+*.egg-info/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Environment
+.env
+.env.*
+
+# AWS credentials
+.aws/
+*.credentials
+
+# Modifai Pipeline Generated Outputs
+virtual_mind_report.json
+demo_virtual_mind.json
+events.jsonl
+agent_events.jsonl
+smoke_events.jsonl
+test_events.jsonl
+generated_reports/
+output/
+*.jsonl
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build manual and planning docs
+# P1_BUILD_MANUAL.md
+# implementation_plan.md
+
+# AWS SAM
+.aws-sam/

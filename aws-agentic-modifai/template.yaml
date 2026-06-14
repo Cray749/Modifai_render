@@ -1,0 +1,229 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Autonomous Agentic Modifai Pipeline
+
+Globals:
+  Function:
+    Environment:
+      Variables:
+        AWS_REGION_NAME: !Ref AWS::Region
+
+Resources:
+  BedrockCustomizationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: BedrockS3Access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${ModifaiDataBucket}"
+                  - !Sub "arn:aws:s3:::${ModifaiDataBucket}/*"
+
+  IntentAnalyzerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/
+      Handler: intent_analyzer.lambda_handler
+      Runtime: python3.12
+      Timeout: 60
+      Policies:
+        - Statement:
+          - Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: '*'
+        - Statement:
+          - Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:modifai/gemini*'
+
+  DocumentProcessorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/
+      Handler: document_processor.lambda_handler
+      Runtime: python3.12
+      Timeout: 300
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ModifaiDataBucket
+        - Statement:
+          - Effect: Allow
+            Action:
+              - textract:DetectDocumentText
+              - textract:StartDocumentTextDetection
+              - textract:GetDocumentTextDetection
+            Resource: '*'
+
+  DatasetGeneratorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/
+      Handler: dataset_generator.lambda_handler
+      Runtime: python3.12
+      Timeout: 600
+      Environment:
+        Variables:
+          SAMPLES_PER_CHUNK: '4'
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ModifaiDataBucket
+        - Statement:
+          - Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:modifai/gemini*'
+
+  DatasetEvaluatorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/
+      Handler: dataset_evaluator.lambda_handler
+      Runtime: python3.12
+      Timeout: 120
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ModifaiDataBucket
+        - Statement:
+          - Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:modifai/gemini*'
+
+  FineTuningTriggerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/
+      Handler: fine_tuning_trigger.lambda_handler
+      Runtime: python3.12
+      Timeout: 60
+      Environment:
+        Variables:
+          BEDROCK_ROLE_ARN: !GetAtt BedrockCustomizationRole.Arn
+          S3_BUCKET: !Ref ModifaiDataBucket
+      Policies:
+        - Statement:
+          - Effect: Allow
+            Action:
+              - bedrock:CreateModelCustomizationJob
+              - iam:PassRole
+            Resource: '*'
+
+  StatusCheckerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/
+      Handler: status_checker.lambda_handler
+      Runtime: python3.12
+      Timeout: 30
+      Policies:
+        - Statement:
+          - Effect: Allow
+            Action:
+              - bedrock:GetModelCustomizationJob
+            Resource: '*'
+
+  ModelEvaluatorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/
+      Handler: model_evaluator.lambda_handler
+      Runtime: python3.12
+      Timeout: 120
+      Policies:
+        - Statement:
+          - Effect: Allow
+            Action:
+
+              - bedrock:GetModelCustomizationJob
+            Resource: '*'
+        - Statement:
+          - Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:modifai/gemini*'
+
+  HyperparameterTunerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/
+      Handler: hyperparameter_tuner.lambda_handler
+      Runtime: python3.12
+      Timeout: 60
+      Environment:
+        Variables:
+          QUALITY_THRESHOLD: '0.85'
+          MAX_TUNING_ATTEMPTS: '3'
+      Policies:
+        - Statement:
+          - Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:modifai/gemini*'
+
+  DeployerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/
+      Handler: deployer.lambda_handler
+      Runtime: python3.12
+      Timeout: 60
+      Policies:
+        - Statement:
+          - Effect: Allow
+            Action:
+              - bedrock:CreateProvisionedModelThroughput
+            Resource: '*'
+
+  ModifaiStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: infrastructure/statemachine.asl.json
+      DefinitionSubstitutions:
+        IntentAnalyzerLambdaArn: !GetAtt IntentAnalyzerFunction.Arn
+        DocumentProcessorLambdaArn: !GetAtt DocumentProcessorFunction.Arn
+        DatasetGeneratorLambdaArn: !GetAtt DatasetGeneratorFunction.Arn
+        DatasetEvaluatorLambdaArn: !GetAtt DatasetEvaluatorFunction.Arn
+        FineTuningTriggerLambdaArn: !GetAtt FineTuningTriggerFunction.Arn
+        StatusCheckerLambdaArn: !GetAtt StatusCheckerFunction.Arn
+        ModelEvaluatorLambdaArn: !GetAtt ModelEvaluatorFunction.Arn
+        HyperparameterTunerLambdaArn: !GetAtt HyperparameterTunerFunction.Arn
+        DeployerLambdaArn: !GetAtt DeployerFunction.Arn
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref IntentAnalyzerFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref DocumentProcessorFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref DatasetGeneratorFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref DatasetEvaluatorFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref FineTuningTriggerFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref StatusCheckerFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ModelEvaluatorFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref HyperparameterTunerFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref DeployerFunction
+
+  ModifaiDataBucket:
+    Type: AWS::S3::Bucket
