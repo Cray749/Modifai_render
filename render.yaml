@@ -8,7 +8,7 @@ services:
   # ── Backend — FastAPI Web Service ─────────────────────────────────────────────
   - type: web
     name: modifai-backend
-    env: python
+    runtime: python      # 'env' is deprecated; use 'runtime'
     plan: free
     region: oregon
     # Run from repo root so virtual_mind/ is accessible at ../../../virtual_mind
@@ -71,12 +71,18 @@ services:
 
 
   # ── Frontend — React / Vite Static Site ──────────────────────────────────────
-  - type: static
+  # Per Render Blueprint spec: static sites use type: web + runtime: static
+  # (type: static is NOT a valid value — causes schema validation error)
+  - type: web
     name: modifai-frontend
+    runtime: static
     # VITE_API_URL is injected as a shell variable so Vite bakes it into the
-    # production bundle at build time. type:static does NOT support envVars in
+    # production bundle at build time. Static sites do NOT support envVars in
     # render.yaml — this inline approach is the correct workaround.
     buildCommand: cd frontend && VITE_API_URL=https://modifai-backend.onrender.com/api/v1 npm install && VITE_API_URL=https://modifai-backend.onrender.com/api/v1 npm run build
     staticPublishPath: frontend/dist
-    # NOTE: After deploy, configure the SPA rewrite in the Render dashboard:
-    # Static Site → Redirects/Rewrites → Add Rule: source=/* destination=/index.html type=Rewrite
+    # SPA routing — all unknown paths rewrite to /index.html for React Router
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
