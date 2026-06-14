@@ -32,6 +32,8 @@ services:
       # ── AWS ────────────────────────────────────────────────────────────────
       - key: AWS_REGION
         value: ap-south-1
+      - key: S3_BUCKET
+        value: modifai-modifaidatabucket-i9qdgwtbeceg
 
       # ── LLM / Virtual Mind (set LLM_PROVIDER to match your key) ───────────
       # Options: openrouter | gemini | bedrock
@@ -58,19 +60,14 @@ services:
       - key: CORS_ORIGINS
         value: https://modifai-frontend.onrender.com,http://localhost:5173
 
-      # ── SECRET variables — add these in the Render dashboard ───────────────
-      # DO NOT paste secrets into this file. Add them via:
-      # Render Dashboard → modifai-backend → Environment → Add Secret File / Env Var
+      # ── SECRET variables — add these 4 in the Render dashboard ────────────
+      # Render Dashboard → modifai-backend → Environment → Add Env Var
+      # (use Secret type so they are encrypted and never shown in logs)
       #
-      #   AWS_ACCESS_KEY_ID         your AWS IAM access key
-      #   AWS_SECRET_ACCESS_KEY     your AWS IAM secret key
-      #   S3_BUCKET                 e.g. modifai-data
-      #   STATE_MACHINE_ARN         your Step Functions ARN
+      #   AWS_ACCESS_KEY_ID         (your IAM key)
+      #   AWS_SECRET_ACCESS_KEY     (your IAM secret — note: contains special chars, paste carefully)
+      #   STATE_MACHINE_ARN         arn:aws:states:ap-south-1:...:stateMachine:ModifaiStateMachine-...
       #   OPENROUTER_API_KEY        sk-or-v1-...
-      #   OR_SECRET_NAME            modifai/or  (if using Secrets Manager fallback)
-      #
-      # Optional — only needed if LLM_PROVIDER=gemini:
-      #   GEMINI_API_KEY            your Google AI Studio key
 
 
   # ── Frontend — React / Vite Static Site ──────────────────────────────────────
